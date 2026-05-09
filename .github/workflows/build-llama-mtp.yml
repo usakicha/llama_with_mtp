@@ -1,0 +1,89 @@
+name: Build llama.cpp CUDA MTP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo docker image prune -af || true
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+
+        sudo apt install -y \
+          git \
+          build-essential \
+          cmake \
+          ninja-build \
+          wget
+
+    - name: Install CUDA 12.9
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
+        sudo apt update
+
+        sudo apt install -y cuda-toolkit-12-9
+
+    - name: Clone llama.cpp
+      run: |
+        git clone https://github.com/ggml-org/llama.cpp.git
+
+    - name: Merge PR #22673
+      run: |
+        cd llama.cpp
+
+        git fetch origin
+        git fetch origin pull/22673/head:pr-22673
+
+        git checkout master
+        git reset --hard origin/master
+
+        git merge --no-ff pr-22673 -m "Merge PR #22673 MTP Support"
+
+    - name: Build llama-server
+      run: |
+        cd llama.cpp
+
+        cmake -B build \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DGGML_CUDA=ON \
+          -DGGML_NATIVE=OFF \
+          -DGGML_AVX=ON \
+          -DGGML_AVX2=ON \
+          -DGGML_F16C=ON \
+          -DGGML_FMA=ON \
+          -DGGML_AVX512=OFF \
+          -DCMAKE_CUDA_ARCHITECTURES=61
+
+        cmake --build build \
+          --config Release \
+          --target llama-server \
+          -j$(nproc)
+
+    - name: Package binaries
+      run: |
+        mkdir release
+
+        cp llama.cpp/build/bin/llama-server release/
+        cp llama.cpp/build/bin/libggml* release/ || true
+        cp llama.cpp/build/bin/libllama* release/ || true
+
+        tar -czvf llama-server-mtp-cuda-ubuntu-avx2.tar.gz release
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: llama-server-mtp-cuda-avx2
+        path: llama-server-mtp-cuda-ubuntu-avx2.tar.gz
