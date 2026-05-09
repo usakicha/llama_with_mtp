@@ -63,7 +63,8 @@ jobs:
           -DGGML_F16C=ON \
           -DGGML_FMA=ON \
           -DGGML_AVX512=OFF \
-          -DCMAKE_CUDA_ARCHITECTURES=61
+          -DCMAKE_CUDA_ARCHITECTURES=61 \
+          -DCUDA_USE_STATIC_CUDA_RUNTIME=ON
 
         cmake --build build \
           --config Release \
