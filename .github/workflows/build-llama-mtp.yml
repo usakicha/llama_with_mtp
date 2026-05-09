@@ -42,13 +42,15 @@ jobs:
     - name: Merge PR #22673
       run: |
         cd llama.cpp
-
-        git fetch origin
+    
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+    
+        git fetch origin master
         git fetch origin pull/22673/head:pr-22673
-
-        git checkout master
-        git reset --hard origin/master
-
+    
+        git checkout -B mtp-build origin/master
+    
         git merge --no-ff pr-22673 -m "Merge PR #22673 MTP Support"
 
     - name: Build llama-server
