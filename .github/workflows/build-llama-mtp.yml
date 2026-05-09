@@ -67,17 +67,19 @@ jobs:
 
         cmake --build build \
           --config Release \
-          --target llama-server \
+          --target llama-server llama-bench \
           -j$(nproc)
 
     - name: Package binaries
       run: |
-        mkdir release
-
+        mkdir -p release
+    
         cp llama.cpp/build/bin/llama-server release/
-        cp llama.cpp/build/bin/libggml* release/ || true
-        cp llama.cpp/build/bin/libllama* release/ || true
-
+    
+        find llama.cpp/build -name "*.so*" -exec cp {} release/ \;
+    
+        chmod +x release/llama-server
+    
         tar -czvf llama-server-mtp-cuda-ubuntu-avx2.tar.gz release
 
     - name: Upload artifact
