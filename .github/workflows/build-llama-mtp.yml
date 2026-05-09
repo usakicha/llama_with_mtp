@@ -35,9 +35,6 @@ jobs:
 
         sudo apt install -y cuda-toolkit-12-9
 
-    - name: Clone llama.cpp
-      run: |
-        git clone https://github.com/ggml-org/llama.cpp.git
 
     - name: Checkout llama.cpp PR #22673
       run: |
