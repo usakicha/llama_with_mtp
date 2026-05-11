@@ -3,6 +3,9 @@ name: Build llama.cpp CUDA MTP
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -96,7 +99,7 @@ jobs:
         tar -czvf llama-server-mtp-cuda-ubuntu-avx2.tar.gz release
     
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: llama-server-mtp-cuda-avx2
         path: llama-server-mtp-cuda-ubuntu-avx2.tar.gz
@@ -104,5 +107,5 @@ jobs:
     - name: Upload Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: latest
+        tag_name: cuda-build-${{ github.run_number }}
         files: llama-server-mtp-cuda-ubuntu-avx2.tar.gz
