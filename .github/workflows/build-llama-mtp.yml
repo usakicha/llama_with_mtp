@@ -100,3 +100,9 @@ jobs:
       with:
         name: llama-server-mtp-cuda-avx2
         path: llama-server-mtp-cuda-ubuntu-avx2.tar.gz
+
+    - name: Upload Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: latest
+        files: llama-server-mtp-cuda-ubuntu-avx2.tar.gz
