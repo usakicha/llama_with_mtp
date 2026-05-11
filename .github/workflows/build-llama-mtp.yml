@@ -23,7 +23,8 @@ jobs:
           build-essential \
           cmake \
           ninja-build \
-          wget
+          wget \
+          patchelf
 
     - name: Install CUDA 12.4
       run: |
@@ -76,15 +77,26 @@ jobs:
         mkdir -p release
     
         cp llama.cpp/build/bin/llama-server release/
+        cp llama.cpp/build/bin/llama-bench release/
     
+        # copy llama.cpp generated libs
         find llama.cpp/build -name "*.so*" -exec cp {} release/ \;
+    
+        # copy CUDA runtime libs
+        cp /usr/local/cuda/lib64/libcudart.so* release/
+        cp /usr/local/cuda/lib64/libcublas.so* release/
+        cp /usr/local/cuda/lib64/libcublasLt.so* release/
     
         chmod +x release/llama-server
     
+        # add rpath
+        patchelf --set-rpath '$ORIGIN' release/llama-server
+        patchelf --set-rpath '$ORIGIN' release/llama-bench
+    
         tar -czvf llama-server-mtp-cuda-ubuntu-avx2.tar.gz release
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: llama-server-mtp-cuda-avx2
-        path: llama-server-mtp-cuda-ubuntu-avx2.tar.gz
+    
+        - name: Upload artifact
+          uses: actions/upload-artifact@v4
+          with:
+            name: llama-server-mtp-cuda-avx2
+            path: llama-server-mtp-cuda-ubuntu-avx2.tar.gz
