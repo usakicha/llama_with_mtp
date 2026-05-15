@@ -44,7 +44,7 @@ jobs:
       run: |
         git clone https://github.com/usakicha/llama-mtp-turboquant.git
     
-        cd llama.cpp
+        cd llama-mtp-turboquant
 
     - name: Build llama-server
       run: |
