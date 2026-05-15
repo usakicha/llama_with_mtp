@@ -42,9 +42,13 @@ jobs:
 
     - name: Checkout llama.cpp PR #22673
       run: |
-        git clone https://github.com/usakicha/llama-mtp-turboquant.git llama.cpp
+        git clone https://github.com/ggml-org/llama.cpp.git
     
         cd llama.cpp
+            
+        git fetch origin pull/22983/head:pr-22983
+    
+        git checkout pr-22983
 
     - name: Build llama-server
       run: |
@@ -63,7 +67,7 @@ jobs:
           -DGGML_F16C=ON \
           -DGGML_FMA=ON \
           -DGGML_AVX512=OFF \
-          -DCMAKE_CUDA_ARCHITECTURES=61 \
+          -DCMAKE_CUDA_ARCHITECTURES="61;75" \
           -DCUDA_USE_STATIC_CUDA_RUNTIME=ON
 
         cmake --build build \
