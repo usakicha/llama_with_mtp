@@ -42,13 +42,9 @@ jobs:
 
     - name: Checkout llama.cpp PR #22673
       run: |
-        git clone https://github.com/ggml-org/llama.cpp.git
+        git clone https://github.com/usakicha/llama-mtp-turboquant.git
     
         cd llama.cpp
-    
-        git fetch origin pull/22673/head:pr-22673
-    
-        git checkout pr-22673
 
     - name: Build llama-server
       run: |
