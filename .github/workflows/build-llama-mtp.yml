@@ -40,22 +40,18 @@ jobs:
         sudo apt install -y cuda-toolkit-12-4
 
 
-    - name: Checkout llama.cpp PR #22673
+    - name: Checkout llama-cpp-turboquant
       run: |
-        git clone https://github.com/ggml-org/llama.cpp.git
+        git clone https://github.com/TheTom/llama-cpp-turboquant.git
     
-        cd llama.cpp
+        cd llama-cpp-turboquant
             
-        git fetch origin pull/22983/head:pr-22983
-    
-        git checkout pr-22983
-
     - name: Build llama-server
       run: |
         export PATH=/usr/local/cuda/bin:$PATH
 
         nvcc --version
-        cd llama.cpp
+        cd llama-cpp-turboquant
 
         cmake -B build \
           -G Ninja \
@@ -79,11 +75,11 @@ jobs:
       run: |
         mkdir -p release
     
-        cp llama.cpp/build/bin/llama-server release/
-        cp llama.cpp/build/bin/llama-bench release/
+        cp llama-cpp-turboquant/build/bin/llama-server release/
+        cp llama-cpp-turboquant/build/bin/llama-bench release/
     
         # copy llama.cpp generated libs
-        find llama.cpp/build -name "*.so*" -exec cp {} release/ \;
+        find llama-cpp-turboquant/build -name "*.so*" -exec cp {} release/ \;
     
         # copy CUDA runtime libs
         cp /usr/local/cuda/lib64/libcudart.so.12* release/
