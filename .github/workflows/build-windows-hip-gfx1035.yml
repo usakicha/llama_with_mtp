@@ -1,0 +1,796 @@
+name: Build llama.cpp Windows HIP 6.4.2 gfx1035
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "llama.cpp branch, tag or commit"
+        required: false
+        default: ""
+
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-windows-hip-gfx1035.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-hip-642-gfx1035-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows 11 / HIP 6.4.2 / gfx1035
+
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - hip642
+      - gfx1035
+
+    timeout-minutes: 120
+
+    env:
+      BUILD_DIR: build-hip-gfx1035
+      PACKAGE_NAME: llama.cpp-win-x64-hip-6.4.2-gfx1035
+
+      # HIP SDK 6.4.2 默认安装在 6.4 目录，而不是 6.4.2。
+      EXPECTED_HIP_PATH: 'C:\Program Files\AMD\ROCm\6.4'
+
+      ROCBLAS_REPOSITORY: likelovewant/ROCmLibs-for-gfx1103-AMD780M-APU
+      ROCBLAS_RELEASE_TAG: v0.6.4.2
+      ROCBLAS_ASSET_NAME: rocm.gfx1034-gfx1035-gfx1036.for.hip.sdk.6.4.2.7z
+
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Locate HIP SDK 6.4.2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $candidateRoots = @()
+
+          if ($env:HIP_PATH) {
+              $candidateRoots += $env:HIP_PATH
+          }
+
+          if ($env:HIP_PATH_64) {
+              $candidateRoots += $env:HIP_PATH_64
+          }
+
+          $candidateRoots += $env:EXPECTED_HIP_PATH
+
+          $hipPath = $candidateRoots |
+              Where-Object {
+                  $_ -and
+                  (Test-Path (Join-Path $_ "bin\clang.exe")) -and
+                  (Test-Path (Join-Path $_ "bin\clang++.exe"))
+              } |
+              ForEach-Object {
+                  (Resolve-Path $_).Path.TrimEnd("\")
+              } |
+              Select-Object -Unique |
+              Select-Object -First 1
+
+          if (-not $hipPath) {
+              throw @"
+          AMD HIP SDK 6.4.2 was not found.
+
+          Expected path:
+            $env:EXPECTED_HIP_PATH
+
+          Also checked:
+            HIP_PATH
+            HIP_PATH_64
+          "@
+          }
+
+          $requiredFiles = @(
+              "bin\clang.exe",
+              "bin\clang++.exe",
+              "bin\amdhip64_6.dll",
+              "include\hip\hip_runtime.h"
+          )
+
+          foreach ($relativePath in $requiredFiles) {
+              $fullPath = Join-Path $hipPath $relativePath
+
+              if (-not (Test-Path $fullPath)) {
+                  throw "Required HIP SDK 6.x file was not found: $fullPath"
+              }
+          }
+
+          # 防止意外使用 ROCm/HIP 7.x。
+          if (Test-Path (Join-Path $hipPath "bin\amdhip64_7.dll")) {
+              throw @"
+          amdhip64_7.dll was found in the selected HIP directory.
+          The runner appears to contain a mixed HIP 6.x/7.x installation.
+          Use a clean HIP SDK 6.4.2 installation.
+          "@
+          }
+
+          "HIP_PATH=$hipPath" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          "HIP_PATH_64=$hipPath" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          (Join-Path $hipPath "bin") |
+              Out-File `
+                  -FilePath $env:GITHUB_PATH `
+                  -Encoding utf8 `
+                  -Append
+
+          Write-Host "HIP_PATH=$hipPath"
+
+          $runtimeDll = Get-Item `
+              (Join-Path $hipPath "bin\amdhip64_6.dll")
+
+          Write-Host "HIP runtime DLL:"
+          $runtimeDll.VersionInfo |
+              Select-Object `
+                  FileName,
+                  FileVersion,
+                  ProductVersion |
+              Format-List
+
+      - name: Verify HIP toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & "$env:HIP_PATH\bin\clang.exe" --version
+          & "$env:HIP_PATH\bin\clang++.exe" --version
+
+          $hipConfigCandidates = @(
+              "$env:HIP_PATH\bin\hipconfig.bat",
+              "$env:HIP_PATH\bin\hipconfig.exe"
+          )
+
+          $hipConfig = $hipConfigCandidates |
+              Where-Object {
+                  Test-Path $_
+              } |
+              Select-Object -First 1
+
+          if ($hipConfig) {
+              Write-Host "HIP configuration:"
+              & $hipConfig --version
+              & $hipConfig --full
+          }
+          else {
+              Write-Warning "hipconfig was not found; continuing with clang verification."
+          }
+
+          $hipccCandidates = @(
+              "$env:HIP_PATH\bin\hipcc.bat",
+              "$env:HIP_PATH\bin\hipcc.exe"
+          )
+
+          $hipcc = $hipccCandidates |
+              Where-Object {
+                  Test-Path $_
+              } |
+              Select-Object -First 1
+
+          if ($hipcc) {
+              Write-Host "HIP compiler wrapper:"
+              & $hipcc --version
+          }
+          else {
+              Write-Warning "hipcc was not found; llama.cpp will use clang directly."
+          }
+
+      - name: Verify gfx1035 runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $hipInfo = Join-Path $env:HIP_PATH "bin\hipInfo.exe"
+
+          if (-not (Test-Path $hipInfo)) {
+              throw "hipInfo.exe was not found: $hipInfo"
+          }
+
+          $output = & $hipInfo 2>&1 |
+              Tee-Object `
+                  -FilePath "$env:RUNNER_TEMP\hipInfo.txt"
+
+          $text = $output | Out-String
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "hipInfo.exe failed with exit code $LASTEXITCODE"
+          }
+
+          if ($text -notmatch "gfx1035") {
+              throw @"
+          The self-hosted runner did not report a gfx1035 device.
+
+          Detected HIP information:
+          $text
+          "@
+          }
+
+          Write-Host "gfx1035 device detected successfully."
+
+      - name: Locate Visual Studio C++ environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $vswhere = Join-Path `
+              ${env:ProgramFiles(x86)} `
+              "Microsoft Visual Studio\Installer\vswhere.exe"
+
+          if (-not (Test-Path $vswhere)) {
+              throw "vswhere.exe was not found."
+          }
+
+          $vsPath = & $vswhere `
+              -latest `
+              -products * `
+              -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+              -property installationPath
+
+          if (-not $vsPath) {
+              throw "Visual Studio C++ Build Tools were not found."
+          }
+
+          $vcvars64 = Join-Path `
+              $vsPath `
+              "VC\Auxiliary\Build\vcvars64.bat"
+
+          if (-not (Test-Path $vcvars64)) {
+              throw "vcvars64.bat was not found: $vcvars64"
+          }
+
+          "VCVARS64=$vcvars64" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          Write-Host "Visual Studio: $vsPath"
+          Write-Host "VCVARS64: $vcvars64"
+
+      - name: Verify build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $requiredCommands = @(
+              "cmake",
+              "ninja",
+              "7z"
+          )
+
+          foreach ($command in $requiredCommands) {
+              if (-not (
+                  Get-Command $command -ErrorAction SilentlyContinue
+              )) {
+                  throw "Required command was not found: $command"
+              }
+          }
+
+          cmake --version
+          ninja --version
+
+      - name: Configure llama.cpp
+        shell: cmd
+        run: |
+          call "%VCVARS64%"
+
+          set "PATH=%HIP_PATH%\bin;%PATH%"
+          set "HIP_PATH_64=%HIP_PATH%"
+
+          if exist "%BUILD_DIR%" (
+            rmdir /s /q "%BUILD_DIR%"
+          )
+
+          cmake -S . -B "%BUILD_DIR%" -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER="%HIP_PATH%\bin\clang.exe" ^
+            -DCMAKE_CXX_COMPILER="%HIP_PATH%\bin\clang++.exe" ^
+            -DCMAKE_PREFIX_PATH="%HIP_PATH%" ^
+            -DGGML_HIP=ON ^
+            -DGPU_TARGETS=gfx1035 ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CCACHE=OFF ^
+            -DLLAMA_BUILD_TESTS=OFF ^
+            -DLLAMA_BUILD_EXAMPLES=OFF ^
+            -DLLAMA_BUILD_TOOLS=ON ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DLLAMA_BUILD_UI=OFF ^
+            -DLLAMA_CURL=OFF
+
+      - name: Build llama.cpp
+        shell: cmd
+        run: |
+          call "%VCVARS64%"
+
+          set "PATH=%HIP_PATH%\bin;%PATH%"
+          set "HIP_PATH_64=%HIP_PATH%"
+
+          cmake --build "%BUILD_DIR%" ^
+            --parallel %NUMBER_OF_PROCESSORS%
+
+      - name: Verify build products
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $binDir = Join-Path $env:BUILD_DIR "bin"
+
+          $requiredFiles = @(
+              "llama-cli.exe",
+              "llama-server.exe",
+              "llama-bench.exe"
+          )
+
+          foreach ($file in $requiredFiles) {
+              $path = Join-Path $binDir $file
+
+              if (-not (Test-Path $path)) {
+                  throw "Expected build output was not found: $path"
+              }
+          }
+
+          Write-Host "Generated executables:"
+
+          Get-ChildItem `
+              -Path $binDir `
+              -Filter "*.exe" |
+              Sort-Object Name |
+              Select-Object Name, Length
+
+          Write-Host "Generated DLLs:"
+
+          Get-ChildItem `
+              -Path $binDir `
+              -Filter "*.dll" |
+              Sort-Object Name |
+              Select-Object Name, Length
+
+      - name: Download gfx1035 rocBLAS for HIP 6.4.2
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $apiUrl = (
+              "https://api.github.com/repos/{0}/releases/tags/{1}" -f
+              $env:ROCBLAS_REPOSITORY,
+              $env:ROCBLAS_RELEASE_TAG
+          )
+
+          $headers = @{
+              "Accept" = "application/vnd.github+json"
+              "X-GitHub-Api-Version" = "2022-11-28"
+              "Authorization" = "Bearer $env:GITHUB_TOKEN"
+              "User-Agent" = "llama-cpp-gfx1035-builder"
+          }
+
+          $release = Invoke-RestMethod `
+              -Uri $apiUrl `
+              -Headers $headers
+
+          $asset = $release.assets |
+              Where-Object {
+                  $_.name -eq $env:ROCBLAS_ASSET_NAME
+              } |
+              Select-Object -First 1
+
+          if (-not $asset) {
+              $availableAssets = $release.assets.name -join "`n  "
+
+              throw @"
+          Required HIP 6.4.2 gfx1035 asset was not found:
+
+            $env:ROCBLAS_ASSET_NAME
+
+          Available release assets:
+            $availableAssets
+          "@
+          }
+
+          $archivePath = Join-Path `
+              $env:RUNNER_TEMP `
+              $env:ROCBLAS_ASSET_NAME
+
+          Invoke-WebRequest `
+              -Uri $asset.browser_download_url `
+              -Headers $headers `
+              -OutFile $archivePath
+
+          if (-not (Test-Path $archivePath)) {
+              throw "rocBLAS archive download failed."
+          }
+
+          $archiveHash = Get-FileHash `
+              -Path $archivePath `
+              -Algorithm SHA256
+
+          Write-Host "Downloaded rocBLAS package:"
+          Write-Host "  File: $archivePath"
+          Write-Host "  SHA256: $($archiveHash.Hash)"
+
+          $extractPath = Join-Path `
+              $env:RUNNER_TEMP `
+              "rocm-gfx1035-hip642"
+
+          if (Test-Path $extractPath) {
+              Remove-Item `
+                  -Path $extractPath `
+                  -Recurse `
+                  -Force
+          }
+
+          New-Item `
+              -Path $extractPath `
+              -ItemType Directory |
+              Out-Null
+
+          & 7z x `
+              $archivePath `
+              "-o$extractPath" `
+              -y
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to extract the gfx1035 rocBLAS package."
+          }
+
+          $customRocblas = Get-ChildItem `
+              -Path $extractPath `
+              -Filter "rocblas.dll" `
+              -File `
+              -Recurse |
+              Select-Object -First 1
+
+          if (-not $customRocblas) {
+              throw "The extracted package does not contain rocblas.dll."
+          }
+
+          $tensileFile = Get-ChildItem `
+              -Path $extractPath `
+              -File `
+              -Recurse |
+              Where-Object {
+                  $_.Name -like "TensileLibrary*"
+              } |
+              Select-Object -First 1
+
+          if (-not $tensileFile) {
+              throw "The extracted package does not contain TensileLibrary files."
+          }
+
+          "ROCBLAS_EXTRACT_PATH=$extractPath" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          "CUSTOM_ROCBLAS_DLL=$($customRocblas.FullName)" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          "CUSTOM_TENSILE_DIR=$($tensileFile.Directory.FullName)" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          Write-Host "Custom rocblas.dll:"
+          Write-Host "  $($customRocblas.FullName)"
+
+          Write-Host "Tensile library directory:"
+          Write-Host "  $($tensileFile.Directory.FullName)"
+
+          Write-Host "Tensile files:"
+
+          Get-ChildItem `
+              -Path $tensileFile.Directory.FullName `
+              -File |
+              Sort-Object Name |
+              Select-Object Name, Length
+
+      - name: Package Windows runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $binDir = Join-Path $env:BUILD_DIR "bin"
+          $distRoot = Join-Path "dist" $env:PACKAGE_NAME
+
+          if (Test-Path "dist") {
+              Remove-Item `
+                  -Path "dist" `
+                  -Recurse `
+                  -Force
+          }
+
+          New-Item `
+              -Path $distRoot `
+              -ItemType Directory |
+              Out-Null
+
+          # llama.cpp 可执行文件及自身 DLL。
+          Copy-Item `
+              -Path "$binDir\*" `
+              -Destination $distRoot `
+              -Recurse `
+              -Force
+
+          Copy-Item `
+              -Path "LICENSE" `
+              -Destination $distRoot `
+              -Force
+
+          # 复制 HIP SDK 6.4.2 的运行时 DLL。
+          Get-ChildItem `
+              -Path "$env:HIP_PATH\bin" `
+              -Filter "*.dll" `
+              -File |
+              ForEach-Object {
+                  Copy-Item `
+                      -Path $_.FullName `
+                      -Destination $distRoot `
+                      -Force
+              }
+
+          # 强制确认打包的是 HIP 6.x runtime。
+          $hip6Runtime = Join-Path $distRoot "amdhip64_6.dll"
+
+          if (-not (Test-Path $hip6Runtime)) {
+              throw "amdhip64_6.dll was not copied into the package."
+          }
+
+          $hip7Runtime = Join-Path $distRoot "amdhip64_7.dll"
+
+          if (Test-Path $hip7Runtime) {
+              Remove-Item `
+                  -Path $hip7Runtime `
+                  -Force
+
+              throw @"
+          amdhip64_7.dll was unexpectedly found in the package.
+          It has been removed. Clean the self-hosted runner HIP installation.
+          "@
+          }
+
+          # 用 HIP SDK 6.4.2 的 gfx1035 社区版本覆盖官方 rocblas.dll。
+          Copy-Item `
+              -Path $env:CUSTOM_ROCBLAS_DLL `
+              -Destination (Join-Path $distRoot "rocblas.dll") `
+              -Force
+
+          $targetTensileDir = Join-Path `
+              $distRoot `
+              "rocblas\library"
+
+          New-Item `
+              -Path $targetTensileDir `
+              -ItemType Directory `
+              -Force |
+              Out-Null
+
+          Copy-Item `
+              -Path "$env:CUSTOM_TENSILE_DIR\*" `
+              -Destination $targetTensileDir `
+              -Recurse `
+              -Force
+
+          if (-not (
+              Get-ChildItem `
+                  -Path $targetTensileDir `
+                  -Filter "TensileLibrary*" `
+                  -File `
+                  -Recurse
+          )) {
+              throw "No TensileLibrary files were copied into the package."
+          }
+
+          @'
+          @echo off
+          setlocal
+
+          set "APP_DIR=%~dp0"
+          set "PATH=%APP_DIR%;%PATH%"
+          set "ROCBLAS_TENSILE_LIBPATH=%APP_DIR%rocblas\library"
+
+          if "%~1"=="" (
+              echo Usage:
+              echo   run-gfx1035.cmd llama-cli [arguments]
+              echo   run-gfx1035.cmd llama-server [arguments]
+              echo   run-gfx1035.cmd llama-bench [arguments]
+              exit /b 2
+          )
+
+          set "PROGRAM=%~1"
+          shift
+
+          if not exist "%APP_DIR%%PROGRAM%.exe" (
+              echo Executable not found: %PROGRAM%.exe
+              exit /b 1
+          )
+
+          "%APP_DIR%%PROGRAM%.exe" %*
+          exit /b %ERRORLEVEL%
+          '@ |
+              Set-Content `
+                  -Path (Join-Path $distRoot "run-gfx1035.cmd") `
+                  -Encoding ascii
+
+          @'
+          # llama.cpp Windows HIP 6.4.2 / gfx1035
+
+          This package targets:
+
+          - Windows 11 x64
+          - AMD HIP SDK 6.4.2 runtime
+          - AMD gfx1035
+          - Community gfx1035 rocBLAS/Tensile libraries for HIP 6.4.2
+
+          Do not replace the included files with HIP SDK 7.x files.
+
+          ## List devices
+
+          ```cmd
+          run-gfx1035.cmd llama-cli --list-devices
+          ```
+
+          ## CLI
+
+          ```cmd
+          run-gfx1035.cmd llama-cli ^
+            -m D:\Models\model.gguf ^
+            -ngl 99 ^
+            -p "Hello" ^
+            -n 64
+          ```
+
+          ## Server
+
+          ```cmd
+          run-gfx1035.cmd llama-server ^
+            -m D:\Models\model.gguf ^
+            -ngl 99 ^
+            --host 0.0.0.0 ^
+            --port 8080
+          ```
+
+          The launcher sets:
+
+          ```cmd
+          ROCBLAS_TENSILE_LIBPATH=rocblas\library
+          ```
+
+          HSA_OVERRIDE_GFX_VERSION is not used on Windows.
+          '@ |
+              Set-Content `
+                  -Path (Join-Path $distRoot "README-gfx1035.md") `
+                  -Encoding utf8
+
+          Write-Host "Package runtime versions:"
+
+          Get-Item `
+              (Join-Path $distRoot "amdhip64_6.dll"),
+              (Join-Path $distRoot "rocblas.dll") |
+              ForEach-Object {
+                  $_.VersionInfo |
+                      Select-Object `
+                          FileName,
+                          FileVersion,
+                          ProductVersion
+              } |
+              Format-List
+
+      - name: Test packaged HIP device detection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $distRoot = (
+              Resolve-Path (
+                  Join-Path "dist" $env:PACKAGE_NAME
+              )
+          ).Path
+
+          Push-Location $distRoot
+
+          try {
+              $env:PATH = "$distRoot;$env:PATH"
+              $env:ROCBLAS_TENSILE_LIBPATH = (
+                  Join-Path $distRoot "rocblas\library"
+              )
+
+              $output = & ".\llama-cli.exe" --list-devices 2>&1 |
+                  Tee-Object `
+                      -FilePath "device-list.txt"
+
+              $text = $output | Out-String
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "llama-cli --list-devices failed."
+              }
+
+              if (
+                  $text -notmatch "ROCm" -and
+                  $text -notmatch "AMD"
+              ) {
+                  throw @"
+          The packaged llama.cpp did not report an AMD/ROCm device.
+
+          Output:
+          $text
+          "@
+              }
+          }
+          finally {
+              Pop-Location
+          }
+
+      - name: Create ZIP package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $distRoot = Join-Path "dist" $env:PACKAGE_NAME
+          $zipPath = "$env:PACKAGE_NAME.zip"
+          $shaPath = "$zipPath.sha256"
+
+          if (Test-Path $zipPath) {
+              Remove-Item `
+                  -Path $zipPath `
+                  -Force
+          }
+
+          if (Test-Path $shaPath) {
+              Remove-Item `
+                  -Path $shaPath `
+                  -Force
+          }
+
+          Compress-Archive `
+              -Path "$distRoot\*" `
+              -DestinationPath $zipPath `
+              -CompressionLevel Optimal
+
+          $hash = Get-FileHash `
+              -Path $zipPath `
+              -Algorithm SHA256
+
+          "$($hash.Hash)  $zipPath" |
+              Set-Content `
+                  -Path $shaPath `
+                  -Encoding ascii
+
+          Get-Item $zipPath, $shaPath |
+              Select-Object Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama.cpp-win-x64-hip-6.4.2-gfx1035
+          path: |
+            llama.cpp-win-x64-hip-6.4.2-gfx1035.zip
+            llama.cpp-win-x64-hip-6.4.2-gfx1035.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
